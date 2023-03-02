@@ -2,6 +2,7 @@ package worker
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"time"
@@ -30,7 +31,8 @@ type WorkflowWorker struct {
 
 	logger log.Logger
 
-	wg *sync.WaitGroup
+	pollersWg sync.WaitGroup
+	wg        sync.WaitGroup
 }
 
 func NewWorkflowWorker(backend backend.Backend, registry *workflow.Registry, options *Options) *WorkflowWorker {
@@ -52,13 +54,13 @@ func NewWorkflowWorker(backend backend.Backend, registry *workflow.Registry, opt
 		cache: c,
 
 		logger: backend.Logger(),
-
-		wg: &sync.WaitGroup{},
 	}
 }
 
 func (ww *WorkflowWorker) Start(ctx context.Context) error {
-	for i := 0; i <= ww.options.WorkflowPollers; i++ {
+	ww.pollersWg.Add(ww.options.WorkflowPollers)
+
+	for i := 0; i < ww.options.WorkflowPollers; i++ {
 		go ww.runPoll(ctx)
 	}
 
@@ -68,14 +70,19 @@ func (ww *WorkflowWorker) Start(ctx context.Context) error {
 }
 
 func (ww *WorkflowWorker) WaitForCompletion() error {
-	close(ww.workflowTaskQueue)
+	// Wait for task pollers to finish
+	ww.pollersWg.Wait()
 
+	// Wait for tasks to finish
 	ww.wg.Wait()
+	close(ww.workflowTaskQueue)
 
 	return nil
 }
 
 func (ww *WorkflowWorker) runPoll(ctx context.Context) {
+	defer ww.pollersWg.Done()
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -192,11 +199,8 @@ func (ww *WorkflowWorker) getExecutor(ctx context.Context, t *task.Workflow) (wo
 	}
 
 	if !ok {
-		executor, err = workflow.NewExecutor(
-			ww.backend.Logger(), ww.backend.Tracer(), ww.registry, ww.backend, t.WorkflowInstance, clock.New())
-		if err != nil {
-			return nil, fmt.Errorf("creating workflow executor: %w", err)
-		}
+		executor = workflow.NewExecutor(
+			ww.backend.Logger(), ww.backend.Tracer(), ww.registry, ww.backend.Converter(), ww.backend, t.WorkflowInstance, clock.New())
 	}
 
 	// Cache executor instance for future continuation tasks, or refresh last access time
@@ -231,21 +235,14 @@ func (ww *WorkflowWorker) poll(ctx context.Context, timeout time.Duration) (*tas
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	done := make(chan struct{})
+	task, err := ww.backend.GetWorkflowTask(ctx)
+	if err != nil {
+		if errors.Is(err, context.Canceled) {
+			return nil, nil
+		}
 
-	var task *task.Workflow
-	var err error
-
-	go func() {
-		task, err = ww.backend.GetWorkflowTask(ctx)
-		close(done)
-	}()
-
-	select {
-	case <-ctx.Done():
-		return nil, nil
-
-	case <-done:
-		return task, err
+		return nil, err
 	}
+
+	return task, nil
 }

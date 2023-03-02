@@ -12,7 +12,7 @@ import (
 	"github.com/cschleiden/go-workflows/backend/test"
 	"github.com/cschleiden/go-workflows/internal/history"
 	"github.com/cschleiden/go-workflows/log"
-	"github.com/go-redis/redis/v8"
+	"github.com/redis/go-redis/v9"
 )
 
 const (
@@ -20,21 +20,6 @@ const (
 	user     = ""
 	password = "RedisPassw0rd"
 )
-
-func Benchmark_RedisBackend(b *testing.B) {
-	if testing.Short() {
-		b.Skip()
-	}
-
-	client := getClient()
-	setup := getCreateBackend(client, true)
-
-	test.SimpleWorkflowBenchmark(b, setup, func(b test.TestBackend) {
-		if err := b.(*redisBackend).Close(); err != nil {
-			panic(err)
-		}
-	})
-}
 
 func Test_RedisBackend(t *testing.T) {
 	if testing.Short() {
@@ -132,7 +117,7 @@ var _ log.Logger = (*nullLogger)(nil)
 var _ test.TestBackend = (*redisBackend)(nil)
 
 // GetFutureEvents
-func (rb *redisBackend) GetFutureEvents(ctx context.Context) ([]history.Event, error) {
+func (rb *redisBackend) GetFutureEvents(ctx context.Context) ([]*history.Event, error) {
 	r, err := rb.rdb.ZRangeByScore(ctx, futureEventsKey(), &redis.ZRangeBy{
 		Min: "-inf",
 		Max: "+inf",
@@ -142,7 +127,7 @@ func (rb *redisBackend) GetFutureEvents(ctx context.Context) ([]history.Event, e
 		return nil, fmt.Errorf("getting future events: %w", err)
 	}
 
-	events := make([]history.Event, 0)
+	events := make([]*history.Event, 0)
 
 	for _, eventID := range r {
 		eventStr, err := rb.rdb.HGet(ctx, eventID, "event").Result()
@@ -150,7 +135,7 @@ func (rb *redisBackend) GetFutureEvents(ctx context.Context) ([]history.Event, e
 			return nil, fmt.Errorf("getting event %v: %w", eventID, err)
 		}
 
-		var event history.Event
+		var event *history.Event
 		if err := json.Unmarshal([]byte(eventStr), &event); err != nil {
 			return nil, fmt.Errorf("unmarshaling event %v: %w", eventID, err)
 		}

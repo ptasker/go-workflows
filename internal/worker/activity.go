@@ -2,6 +2,7 @@ package worker
 
 import (
 	"context"
+	"errors"
 	"log"
 	"sync"
 	"time"
@@ -24,7 +25,8 @@ type ActivityWorker struct {
 	activityTaskQueue    chan *task.Activity
 	activityTaskExecutor activity.Executor
 
-	wg *sync.WaitGroup
+	wg        sync.WaitGroup
+	pollersWg sync.WaitGroup
 
 	clock clock.Clock
 }
@@ -36,16 +38,16 @@ func NewActivityWorker(backend backend.Backend, registry *workflow.Registry, clo
 		options: options,
 
 		activityTaskQueue:    make(chan *task.Activity),
-		activityTaskExecutor: activity.NewExecutor(backend.Logger(), backend.Tracer(), registry),
-
-		wg: &sync.WaitGroup{},
+		activityTaskExecutor: activity.NewExecutor(backend.Logger(), backend.Tracer(), backend.Converter(), registry),
 
 		clock: clock,
 	}
 }
 
 func (aw *ActivityWorker) Start(ctx context.Context) error {
-	for i := 0; i <= aw.options.ActivityPollers; i++ {
+	aw.pollersWg.Add(aw.options.ActivityPollers)
+
+	for i := 0; i < aw.options.ActivityPollers; i++ {
 		go aw.runPoll(ctx)
 	}
 
@@ -55,14 +57,19 @@ func (aw *ActivityWorker) Start(ctx context.Context) error {
 }
 
 func (aw *ActivityWorker) WaitForCompletion() error {
-	close(aw.activityTaskQueue)
+	// Wait for task pollers to finish
+	aw.pollersWg.Wait()
 
+	// Wait for tasks to finish
 	aw.wg.Wait()
+	close(aw.activityTaskQueue)
 
 	return nil
 }
 
 func (aw *ActivityWorker) runPoll(ctx context.Context) {
+	defer aw.pollersWg.Done()
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -119,31 +126,33 @@ func (aw *ActivityWorker) handleTask(ctx context.Context, task *task.Activity) {
 	ametrics.Distribution(metrickeys.ActivityTaskDelay, metrics.Tags{}, float64(timeInQueue/time.Millisecond))
 
 	// Start heartbeat while activity is running
-	heartbeatCtx, cancelHeartbeat := context.WithCancel(ctx)
-	go func(ctx context.Context) {
-		t := time.NewTicker(aw.options.ActivityHeartbeatInterval)
-		defer t.Stop()
+	if aw.options.ActivityHeartbeatInterval > 0 {
+		heartbeatCtx, cancelHeartbeat := context.WithCancel(ctx)
+		defer cancelHeartbeat()
 
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-t.C:
-				if err := aw.backend.ExtendActivityTask(ctx, task.ID); err != nil {
-					aw.backend.Logger().Panic("extending activity task", "error", err)
+		go func(ctx context.Context) {
+			t := time.NewTicker(aw.options.ActivityHeartbeatInterval)
+			defer t.Stop()
+
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-t.C:
+					if err := aw.backend.ExtendActivityTask(ctx, task.ID); err != nil {
+						aw.backend.Logger().Panic("extending activity task", "error", err)
+					}
 				}
 			}
-		}
-	}(heartbeatCtx)
+		}(heartbeatCtx)
+	}
 
 	timer := metrics.Timer(ametrics, metrickeys.ActivityTaskProcessed, metrics.Tags{})
 	defer timer.Stop()
 
 	result, err := aw.activityTaskExecutor.ExecuteActivity(ctx, task)
 
-	cancelHeartbeat()
-
-	var event history.Event
+	var event *history.Event
 
 	if err != nil {
 		event = history.NewPendingEvent(
@@ -177,20 +186,12 @@ func (aw *ActivityWorker) poll(ctx context.Context, timeout time.Duration) (*tas
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	var task *task.Activity
-	var err error
-
-	done := make(chan struct{})
-
-	go func() {
-		task, err = aw.backend.GetActivityTask(ctx)
-		close(done)
-	}()
-
-	select {
-	case <-ctx.Done():
-		return nil, nil
-	case <-done:
-		return task, err
+	task, err := aw.backend.GetActivityTask(ctx)
+	if err != nil {
+		if errors.Is(err, context.Canceled) {
+			return nil, nil
+		}
 	}
+
+	return task, nil
 }

@@ -3,6 +3,7 @@ package backend
 import (
 	"time"
 
+	"github.com/cschleiden/go-workflows/internal/converter"
 	"github.com/cschleiden/go-workflows/internal/logger"
 	mi "github.com/cschleiden/go-workflows/internal/metrics"
 	"github.com/cschleiden/go-workflows/log"
@@ -17,10 +18,20 @@ type Options struct {
 
 	TracerProvider trace.TracerProvider
 
+	// Converter is the converter to use for serializing and deserializing inputs and results. If not explicitly set
+	// converter.DefaultConverter is used.
+	Converter converter.Converter
+
 	StickyTimeout time.Duration
 
+	// WorkflowLockTimeout determines how long a workflow task can be locked for. If the workflow task is not completed
+	// by that timeframe, it's considered abandoned and another worker might pick it up.
+	//
+	// For long running workflow tasks, combine this with heartbearts.
 	WorkflowLockTimeout time.Duration
 
+	// ActivityLockTimeout determines how long an activity task can be locked for. If the activity task is not completed
+	// by that timeframe, it's considered abandoned and another worker might pick it up
 	ActivityLockTimeout time.Duration
 }
 
@@ -32,6 +43,7 @@ var DefaultOptions Options = Options{
 	Logger:         logger.NewDefaultLogger(),
 	Metrics:        mi.NewNoopMetricsClient(),
 	TracerProvider: trace.NewNoopTracerProvider(),
+	Converter:      converter.DefaultConverter,
 }
 
 type BackendOption func(*Options)
@@ -57,6 +69,12 @@ func WithMetrics(client metrics.Client) BackendOption {
 func WithTracerProvider(tp trace.TracerProvider) BackendOption {
 	return func(o *Options) {
 		o.TracerProvider = tp
+	}
+}
+
+func WithConverter(converter converter.Converter) BackendOption {
+	return func(o *Options) {
+		o.Converter = converter
 	}
 }
 

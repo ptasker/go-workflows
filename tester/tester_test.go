@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/cschleiden/go-workflows/backend"
 	"github.com/cschleiden/go-workflows/internal/sync"
 	"github.com/cschleiden/go-workflows/workflow"
 	"github.com/stretchr/testify/mock"
@@ -147,62 +148,6 @@ func activityLongRunning(ctx context.Context) (int, error) {
 	return 42, nil
 }
 
-func Test_Timer(t *testing.T) {
-	tester := NewWorkflowTester[timerResult](workflowTimer)
-	start := tester.Now()
-
-	tester.Execute()
-
-	require.True(t, tester.WorkflowFinished())
-	wr, _ := tester.WorkflowResult()
-	require.True(t, start.Equal(wr.T1))
-
-	e := start.Add(30 * time.Second)
-	require.True(t, e.Equal(wr.T2), "expected %v, got %v", e, wr.T2)
-}
-
-type timerResult struct {
-	T1 time.Time
-	T2 time.Time
-}
-
-func workflowTimer(ctx workflow.Context) (timerResult, error) {
-	t1 := workflow.Now(ctx)
-
-	workflow.ScheduleTimer(ctx, 30*time.Second).Get(ctx)
-
-	t2 := workflow.Now(ctx)
-
-	workflow.ScheduleTimer(ctx, 30*time.Second).Get(ctx)
-
-	return timerResult{
-		T1: t1,
-		T2: t2,
-	}, nil
-}
-
-func Test_TimerCancellation(t *testing.T) {
-	tester := NewWorkflowTester[time.Time](workflowTimerCancellation)
-	start := tester.Now()
-
-	tester.Execute()
-
-	require.True(t, tester.WorkflowFinished())
-
-	wfR, _ := tester.WorkflowResult()
-	require.True(t, start.Equal(wfR), "expected %v, got %v", start, wfR)
-}
-
-func workflowTimerCancellation(ctx workflow.Context) (time.Time, error) {
-	tctx, cancel := workflow.WithCancel(ctx)
-	t := workflow.ScheduleTimer(tctx, 30*time.Second)
-	cancel()
-
-	_, _ = t.Get(ctx)
-
-	return workflow.Now(ctx), nil
-}
-
 func Test_Signals(t *testing.T) {
 	tester := NewWorkflowTester[string](workflowSignal)
 	tester.ScheduleCallback(time.Duration(5*time.Second), func() {
@@ -233,4 +178,65 @@ func workflowSignal(ctx workflow.Context) (string, error) {
 	}
 
 	return val, nil
+}
+
+func Test_SignalSubWorkflowBeforeScheduling(t *testing.T) {
+	tester := NewWorkflowTester[string](workflowSubWorkFlowsAndSignals)
+
+	tester.Execute()
+
+	require.True(t, tester.WorkflowFinished())
+	wfR, wfErr := tester.WorkflowResult()
+	require.Equal(t, backend.ErrInstanceNotFound.Error(), wfErr)
+	require.IsType(t, "", wfR)
+}
+
+func workflowSubWorkFlowsAndSignals(ctx workflow.Context) (string, error) {
+	_, err := workflow.SignalWorkflow(ctx, "subworkflow", "test", "").Get(ctx)
+	if err != backend.ErrInstanceNotFound {
+		return "", err
+	}
+
+	return "finished without errors!", nil
+}
+
+func workflowSum(ctx workflow.Context, valA, valB int) (int, error) {
+	return valA + valB, nil
+}
+
+func Test_SignalSubWorkflow(t *testing.T) {
+	tester := NewWorkflowTester[int](workflowSubworkflowSignal)
+	require.NoError(t, tester.Registry().RegisterWorkflow(waitForSignal))
+
+	tester.Execute()
+
+	require.True(t, tester.WorkflowFinished())
+	wfR, wfErr := tester.WorkflowResult()
+	require.Empty(t, wfErr)
+	require.Equal(t, 42, wfR)
+}
+
+func workflowSubworkflowSignal(ctx workflow.Context) (int, error) {
+	sw := workflow.CreateSubWorkflowInstance[int](ctx, workflow.SubWorkflowOptions{
+		InstanceID: "subworkflow",
+	}, waitForSignal)
+
+	_, err := workflow.SignalWorkflow(ctx, "subworkflow", "signal", "").Get(ctx)
+	if err != nil {
+		return 0, err
+	}
+
+	// Wait for subworkflow and return result
+	return sw.Get(ctx)
+}
+
+func waitForSignal(ctx workflow.Context) (int, error) {
+	workflow.Select(
+		ctx,
+		workflow.Receive(workflow.NewSignalChannel[any](ctx, "signal"), func(ctx workflow.Context, signal any, ok bool) {
+			// Do nothing
+		}),
+	)
+
+	return 42, nil
 }

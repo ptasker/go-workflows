@@ -8,6 +8,7 @@ import (
 
 	"github.com/benbjohnson/clock"
 	"github.com/cschleiden/go-workflows/backend"
+	"github.com/cschleiden/go-workflows/internal/converter"
 	"github.com/cschleiden/go-workflows/internal/core"
 	"github.com/cschleiden/go-workflows/internal/history"
 	"github.com/cschleiden/go-workflows/internal/logger"
@@ -25,16 +26,14 @@ func Test_Cache_StoreAndGet(t *testing.T) {
 	r.RegisterWorkflow(workflowWithActivity)
 
 	i := core.NewWorkflowInstance("instanceID", "executionID")
-	e, err := wf.NewExecutor(
-		logger.NewDefaultLogger(), trace.NewNoopTracerProvider().Tracer(backend.TracerName), r, &testHistoryProvider{}, i, clock.New())
-	require.NoError(t, err)
+	e := wf.NewExecutor(
+		logger.NewDefaultLogger(), trace.NewNoopTracerProvider().Tracer(backend.TracerName), r, converter.DefaultConverter, &testHistoryProvider{}, i, clock.New())
 
 	i2 := core.NewWorkflowInstance("instanceID2", "executionID2")
-	e2, err := wf.NewExecutor(
-		logger.NewDefaultLogger(), trace.NewNoopTracerProvider().Tracer(backend.TracerName), r, &testHistoryProvider{}, i, clock.New())
-	require.NoError(t, err)
+	e2 := wf.NewExecutor(
+		logger.NewDefaultLogger(), trace.NewNoopTracerProvider().Tracer(backend.TracerName), r, converter.DefaultConverter, &testHistoryProvider{}, i, clock.New())
 
-	err = c.Store(context.Background(), i, e)
+	err := c.Store(context.Background(), i, e)
 	require.NoError(t, err)
 
 	re, ok, err := c.Get(context.Background(), i)
@@ -61,11 +60,10 @@ func Test_Cache_Evict(t *testing.T) {
 	i := core.NewWorkflowInstance("instanceID", "executionID")
 	r := wf.NewRegistry()
 	r.RegisterWorkflow(workflowWithActivity)
-	e, err := wf.NewExecutor(
-		logger.NewDefaultLogger(), trace.NewNoopTracerProvider().Tracer(backend.TracerName), r, &testHistoryProvider{}, i, clock.New())
-	require.NoError(t, err)
+	e := wf.NewExecutor(
+		logger.NewDefaultLogger(), trace.NewNoopTracerProvider().Tracer(backend.TracerName), r, converter.DefaultConverter, &testHistoryProvider{}, i, clock.New())
 
-	err = c.Store(context.Background(), i, e)
+	err := c.Store(context.Background(), i, e)
 	require.NoError(t, err)
 
 	go c.StartEviction(context.Background())
@@ -96,9 +94,9 @@ func activity1(ctx context.Context) (int, error) {
 }
 
 type testHistoryProvider struct {
-	history []history.Event
+	history []*history.Event
 }
 
-func (t *testHistoryProvider) GetWorkflowInstanceHistory(ctx context.Context, instance *core.WorkflowInstance, lastSequenceID *int64) ([]history.Event, error) {
+func (t *testHistoryProvider) GetWorkflowInstanceHistory(ctx context.Context, instance *core.WorkflowInstance, lastSequenceID *int64) ([]*history.Event, error) {
 	return t.history, nil
 }

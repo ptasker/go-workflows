@@ -6,12 +6,13 @@ import (
 	"time"
 
 	"github.com/cschleiden/go-workflows/backend"
+	"github.com/cschleiden/go-workflows/internal/converter"
 	"github.com/cschleiden/go-workflows/internal/core"
 	"github.com/cschleiden/go-workflows/internal/history"
 	"github.com/cschleiden/go-workflows/internal/metrickeys"
 	"github.com/cschleiden/go-workflows/log"
 	"github.com/cschleiden/go-workflows/metrics"
-	"github.com/go-redis/redis/v8"
+	"github.com/redis/go-redis/v9"
 	"go.opentelemetry.io/otel/trace"
 )
 
@@ -101,7 +102,7 @@ type redisBackend struct {
 type activityData struct {
 	Instance *core.WorkflowInstance `json:"instance,omitempty"`
 	ID       string                 `json:"id,omitempty"`
-	Event    history.Event          `json:"event,omitempty"`
+	Event    *history.Event         `json:"event,omitempty"`
 }
 
 func (rb *redisBackend) Logger() log.Logger {
@@ -114,6 +115,10 @@ func (rb *redisBackend) Metrics() metrics.Client {
 
 func (rb *redisBackend) Tracer() trace.Tracer {
 	return rb.options.TracerProvider.Tracer(backend.TracerName)
+}
+
+func (rb *redisBackend) Converter() converter.Converter {
+	return rb.options.Converter
 }
 
 func (rb *redisBackend) Close() error {

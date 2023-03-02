@@ -7,7 +7,7 @@ import (
 
 	"github.com/cschleiden/go-workflows/internal/core"
 	"github.com/cschleiden/go-workflows/internal/history"
-	"github.com/go-redis/redis/v8"
+	"github.com/redis/go-redis/v9"
 )
 
 func addEventToStreamP(ctx context.Context, p redis.Pipeliner, streamKey string, event *history.Event) error {
@@ -37,7 +37,7 @@ var addEventsToStreamCmd = redis.NewScript(`
 	return msgID
 `)
 
-func addEventsToHistoryStreamP(ctx context.Context, p redis.Pipeliner, streamKey string, events []history.Event) error {
+func addEventsToHistoryStreamP(ctx context.Context, p redis.Pipeliner, streamKey string, events []*history.Event) error {
 	eventsData := make([]string, 0)
 	for _, event := range events {
 		eventData, err := json.Marshal(event)

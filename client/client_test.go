@@ -12,10 +12,32 @@ import (
 	"github.com/cschleiden/go-workflows/internal/core"
 	"github.com/cschleiden/go-workflows/internal/history"
 	"github.com/cschleiden/go-workflows/internal/logger"
+	"github.com/cschleiden/go-workflows/workflow"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
+
+func Test_Client_CreateWorkflowInstance_ParamMismatch(t *testing.T) {
+	wf := func(workflow.Context, int) (int, error) {
+		return 0, nil
+	}
+
+	ctx := context.Background()
+
+	b := &backend.MockBackend{}
+	c := &client{
+		backend: b,
+		clock:   clock.New(),
+	}
+
+	result, err := c.CreateWorkflowInstance(ctx, WorkflowInstanceOptions{
+		InstanceID: "id",
+	}, wf, "foo")
+	require.Zero(t, result)
+	require.EqualError(t, err, "mismatched argument type: expected int, got string")
+	b.AssertExpectations(t)
+}
 
 func Test_Client_GetWorkflowResultTimeout(t *testing.T) {
 	instance := core.NewWorkflowInstance(uuid.NewString(), "test")
@@ -51,13 +73,14 @@ func Test_Client_GetWorkflowResultSuccess(t *testing.T) {
 		mockClock.Add(time.Second)
 	})
 	b.On("GetWorkflowInstanceState", mock.Anything, instance).Return(core.WorkflowInstanceStateFinished, nil)
-	b.On("GetWorkflowInstanceHistory", mock.Anything, instance, (*int64)(nil)).Return([]history.Event{
+	b.On("GetWorkflowInstanceHistory", mock.Anything, instance, (*int64)(nil)).Return([]*history.Event{
 		history.NewHistoryEvent(1, time.Now(), history.EventType_WorkflowExecutionStarted, &history.ExecutionStartedAttributes{}),
 		history.NewHistoryEvent(2, time.Now(), history.EventType_WorkflowExecutionFinished, &history.ExecutionCompletedAttributes{
 			Result: r,
 			Error:  "",
 		}),
 	}, nil)
+	b.On("Converter").Return(converter.DefaultConverter)
 
 	c := &client{
 		backend: b,
@@ -77,7 +100,8 @@ func Test_Client_SignalWorkflow(t *testing.T) {
 
 	b := &backend.MockBackend{}
 	b.On("Logger").Return(logger.NewDefaultLogger())
-	b.On("SignalWorkflow", ctx, instanceID, mock.MatchedBy(func(event history.Event) bool {
+	b.On("Converter").Return(converter.DefaultConverter)
+	b.On("SignalWorkflow", ctx, instanceID, mock.MatchedBy(func(event *history.Event) bool {
 		return event.Type == history.EventType_SignalReceived &&
 			event.Attributes.(*history.SignalReceivedAttributes).Name == "test"
 	})).Return(nil)
@@ -104,7 +128,8 @@ func Test_Client_SignalWorkflow_WithArgs(t *testing.T) {
 
 	b := &backend.MockBackend{}
 	b.On("Logger").Return(logger.NewDefaultLogger())
-	b.On("SignalWorkflow", ctx, instanceID, mock.MatchedBy(func(event history.Event) bool {
+	b.On("Converter").Return(converter.DefaultConverter)
+	b.On("SignalWorkflow", ctx, instanceID, mock.MatchedBy(func(event *history.Event) bool {
 		return event.Type == history.EventType_SignalReceived &&
 			event.Attributes.(*history.SignalReceivedAttributes).Name == "test" &&
 			bytes.Equal(event.Attributes.(*history.SignalReceivedAttributes).Arg, input)

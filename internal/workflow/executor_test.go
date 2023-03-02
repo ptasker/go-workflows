@@ -24,10 +24,10 @@ import (
 )
 
 type testHistoryProvider struct {
-	history []history.Event
+	history []*history.Event
 }
 
-func (t *testHistoryProvider) GetWorkflowInstanceHistory(ctx context.Context, instance *core.WorkflowInstance, lastSequenceID *int64) ([]history.Event, error) {
+func (t *testHistoryProvider) GetWorkflowInstanceHistory(ctx context.Context, instance *core.WorkflowInstance, lastSequenceID *int64) ([]*history.Event, error) {
 	return t.history, nil
 }
 
@@ -35,10 +35,7 @@ func newExecutor(r *Registry, i *core.WorkflowInstance, historyProvider Workflow
 	logger := logger.NewDefaultLogger()
 	tracer := trace.NewNoopTracerProvider().Tracer("test")
 
-	e, err := NewExecutor(logger, tracer, r, historyProvider, i, clock.New())
-	if err != nil {
-		panic(err)
-	}
+	e := NewExecutor(logger, tracer, r, converter.DefaultConverter, historyProvider, i, clock.New())
 
 	return e.(*executor)
 }
@@ -95,7 +92,7 @@ func Test_Executor(t *testing.T) {
 					ID:               "taskID",
 					WorkflowInstance: core.NewWorkflowInstance("instanceID", "executionID"),
 					Metadata:         &core.WorkflowMetadata{},
-					NewEvents: []history.Event{
+					NewEvents: []*history.Event{
 						history.NewHistoryEvent(
 							1,
 							time.Now(),
@@ -147,7 +144,7 @@ func Test_Executor(t *testing.T) {
 					LastSequenceID:   3,
 				}
 
-				hp.history = []history.Event{
+				hp.history = []*history.Event{
 					history.NewHistoryEvent(
 						1,
 						time.Now(),
@@ -209,7 +206,7 @@ func Test_Executor(t *testing.T) {
 					ID:               "oldtaskid",
 					WorkflowInstance: core.NewWorkflowInstance("instanceID", "executionID"),
 					Metadata:         &core.WorkflowMetadata{},
-					NewEvents: []history.Event{
+					NewEvents: []*history.Event{
 						history.NewPendingEvent(
 							time.Now(),
 							history.EventType_WorkflowExecutionStarted,
@@ -237,7 +234,7 @@ func Test_Executor(t *testing.T) {
 				require.False(t, e.workflow.Completed())
 				require.Len(t, e.workflowState.Commands(), 1)
 
-				h := []history.Event{}
+				h := []*history.Event{}
 				h = append(h, oldTask.NewEvents...)
 				h = append(h, taskResult.Executed...)
 
@@ -245,7 +242,7 @@ func Test_Executor(t *testing.T) {
 					ID:               "taskID",
 					WorkflowInstance: oldTask.WorkflowInstance,
 					Metadata:         &core.WorkflowMetadata{},
-					NewEvents: []history.Event{
+					NewEvents: []*history.Event{
 						history.NewHistoryEvent(
 							1,
 							time.Now(),
@@ -301,7 +298,7 @@ func Test_Executor(t *testing.T) {
 					ID:               "taskID",
 					WorkflowInstance: core.NewWorkflowInstance("instanceID", "executionID"),
 					Metadata:         &core.WorkflowMetadata{},
-					NewEvents: []history.Event{
+					NewEvents: []*history.Event{
 						history.NewHistoryEvent(
 							1,
 							time.Now(),
@@ -347,7 +344,7 @@ func Test_Executor(t *testing.T) {
 					ID:               "taskID",
 					WorkflowInstance: core.NewWorkflowInstance("instanceID", "executionID"),
 					Metadata:         &core.WorkflowMetadata{},
-					NewEvents: []history.Event{
+					NewEvents: []*history.Event{
 						history.NewHistoryEvent(
 							1,
 							time.Now(),
@@ -397,7 +394,7 @@ func Test_Executor(t *testing.T) {
 				require.NoError(t, e.workflow.err)
 				require.Len(t, e.workflowState.Commands(), 2)
 
-				task2 := continueTask(i.InstanceID, []history.Event{
+				task2 := continueTask(i.InstanceID, []*history.Event{
 					history.NewPendingEvent(time.Now(), history.EventType_ActivityCompleted, &history.ActivityCompletedAttributes{}, history.ScheduleEventID(2)),
 				}, result.Executed[len(result.Executed)-1].SequenceID)
 
@@ -429,7 +426,7 @@ func Test_Executor(t *testing.T) {
 					ID:               "taskID",
 					WorkflowInstance: core.NewWorkflowInstance("instanceID", "executionID"),
 					Metadata:         &core.WorkflowMetadata{},
-					NewEvents: []history.Event{
+					NewEvents: []*history.Event{
 						history.NewPendingEvent(
 							time.Now(),
 							history.EventType_WorkflowExecutionStarted,
@@ -470,7 +467,7 @@ func Test_Executor(t *testing.T) {
 					ID:               "taskid",
 					WorkflowInstance: core.NewWorkflowInstance("instanceID", "executionID"),
 					Metadata:         &core.WorkflowMetadata{},
-					NewEvents: []history.Event{
+					NewEvents: []*history.Event{
 						history.NewPendingEvent(
 							time.Now(),
 							history.EventType_WorkflowExecutionStarted,
@@ -558,7 +555,7 @@ func Test_Executor(t *testing.T) {
 
 				// Go past Sleep
 				hp.history = append(hp.history, result.Executed...)
-				result, err = e.ExecuteTask(context.Background(), continueTask("instanceID", []history.Event{
+				result, err = e.ExecuteTask(context.Background(), continueTask("instanceID", []*history.Event{
 					result.TimerEvents[0],
 				}, result.Executed[len(result.Executed)-1].SequenceID))
 
@@ -575,7 +572,7 @@ func Test_Executor(t *testing.T) {
 				// Complete subworkflow
 				swr, _ := converter.DefaultConverter.To(nil)
 				hp.history = append(hp.history, result.Executed...)
-				result, err = e.ExecuteTask(context.Background(), continueTask("instanceID", []history.Event{
+				result, err = e.ExecuteTask(context.Background(), continueTask("instanceID", []*history.Event{
 					history.NewPendingEvent(time.Now(), history.EventType_SubWorkflowCompleted, &history.SubWorkflowCompletedAttributes{
 						Result: swr,
 					}, history.ScheduleEventID(1)),
@@ -609,7 +606,7 @@ func startWorkflowTask(instanceID string, workflow interface{}, workflowArgs ...
 		ID:               uuid.NewString(),
 		WorkflowInstance: core.NewWorkflowInstance(instanceID, "executionID"),
 		Metadata:         &core.WorkflowMetadata{},
-		NewEvents: []history.Event{
+		NewEvents: []*history.Event{
 			history.NewPendingEvent(
 				time.Now(),
 				history.EventType_WorkflowExecutionStarted,
@@ -622,7 +619,7 @@ func startWorkflowTask(instanceID string, workflow interface{}, workflowArgs ...
 	}
 }
 
-func continueTask(instanceID string, newEvents []history.Event, lastSequenceID int64) *task.Workflow {
+func continueTask(instanceID string, newEvents []*history.Event, lastSequenceID int64) *task.Workflow {
 	return &task.Workflow{
 		ID:               uuid.NewString(),
 		WorkflowInstance: core.NewWorkflowInstance(instanceID, "executionID"),
